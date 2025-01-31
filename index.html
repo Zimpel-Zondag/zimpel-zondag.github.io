@@ -1,0 +1,253 @@
+  <!DOCTYPE html>
+  <html lang="en">
+  <head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Achterhoekguessr</title>
+    <script src="https://d3js.org/d3.v7.min.js"></script>
+    <style>
+      svg {
+        width: 100%;
+        height: 100vh;
+      }
+      .geometry {
+        fill: #fff;
+        stroke: #333;
+        stroke-width: 0.5px;
+      }
+      .rivers {
+      fill: none;
+      stroke: blue;
+      stroke-width: 1.5;
+      opacity: 0.7;
+    }
+    .hidden {
+      display: none;
+    }
+    </style>
+
+  </head>
+  <body>
+      <div id="game-info">
+          <h1 id="place-name">Plaats wordt geladen...</h1>
+          <h2 id="score">Totaalscore: 0</h2>
+        </div>
+        <button id="toggle-rivers">Toon/Verberg Rivieren</button>
+
+        <div id="game-end" style="display: none;">
+          <h1>Spel afgelopen!</h1>
+          <div id="endScore"><p>Totalesore: </p></div>
+          <div id="results"></div>
+          <button onclick="startGame()">Opnieuw spelen</button>
+        </div>
+        <svg></svg>        
+
+        <!-- <script href="script.js"></script> -->
+         <script>
+          const svg = d3.select("svg");
+const width = window.innerWidth;
+const height = window.innerHeight;
+
+
+let allowClick = false; // Klikken is standaard niet toegestaan
+
+// Stel projectie en padgenerator in
+const projection = d3.geoMercator()
+  .center([6.3, 52]) // Center op de Achterhoek
+  .scale(40000) // Schaal aanpassen voor de regio
+  .translate([width / 2, height / 2]);
+
+const path = d3.geoPath().projection(projection);
+
+let woonplaatsen = [];
+let currentPlace = null;
+let totalScore = 0;
+let roundScores = [];
+let currentRound = 0;
+const maxRounds = 10;
+
+const mapGroup = svg.append("g")
+  .attr("class", "svg");       
+  
+const riversGroup = svg.append("g")
+  .attr("class", "rivers");
+
+// Laad Achterhoek-kaart
+d3.json("achterhoek.geojson").then((data) => {
+  if (data.type === "FeatureCollection" && data.features) {
+    mapGroup.append("g")
+      .selectAll("path") 
+      .data(data.features)
+      .join("path")
+      .attr("d", path)
+      .attr("class", "geometry")
+      .attr("fill", "#d4e6f1")
+      .attr("stroke", "#333")
+      .attr("stroke-width", 0.5);
+  }
+}).catch((error) => console.error("Fout bij het laden van de Achterhoek-kaart:", error));
+
+// Laad woonplaatsen
+d3.json("plaatsen-achterhoek.geojson").then((data) => {
+  if (data.type === "FeatureCollection" && data.features) {
+    // Transformeer data naar een vereenvoudigd formaat
+    woonplaatsen = data.features.map((feature) => ({
+      name: feature.properties.name,
+      coordinates: feature.geometry.coordinates,
+    }));
+
+    // Start het spel met de geladen woonplaatsen
+    startGame();
+  } else {
+    console.error("Ongeldig GeoJSON-bestand");
+  }
+});
+
+// Laad de GeoJSON-data van rivieren
+fetch("rivier.geojson")
+  .then((response) => response.json())
+  .then((geojson) => {
+    riversGroup.selectAll("path")
+      .data(geojson.features)
+      .enter()
+      .append("path")
+      .attr("d", path)
+      .attr("class", "rivers");
+    });
+
+
+function startGame() {
+  totalScore = 0;
+  clearMap();
+  roundScores = [];
+  currentRound = 0;
+  d3.select("#game-end").style("display", "none");
+  d3.select("#game-info").style("display", "block");
+  svg.on('click', handleClick);
+  nextRound();
+}
+
+function clearMap() {
+  d3.selectAll("circle").remove();
+  d3.selectAll("line").remove();
+  d3.selectAll("text").remove();
+}
+
+// Volgende ronde
+function nextRound() {
+  if (currentRound >= maxRounds) {
+  endGame();
+  return;
+  }
+  allowClick = true; // Klikken inschakelen
+  currentRound++;
+  currentPlace = woonplaatsen[Math.floor(Math.random() * woonplaatsen.length)];
+  d3.select("#place-name").text(`Ronde ${currentRound}/${maxRounds}: Waar ligt ${currentPlace.name}?`);
+}
+
+// Verwerk de click
+function handleClick(event) {
+if (!allowClick) return; // Voorkom klikken als het niet is toegestaan
+
+const [clickX, clickY] = d3.pointer(event);
+const [clickxy, clickyx] = d3.pointer(event);
+const [lon, lat] = projection.invert([clickX, clickY]);
+
+const actualLon = currentPlace.coordinates[0];
+const actualLat = currentPlace.coordinates[1];
+
+const distance = calculateDistance(lat, lon, actualLat, actualLon);
+allowClick = false; // Klikken uitschakelen tot de volgende ronde
+
+// Punten berekenen
+const points = Math.round(calculatePoints(distance, 25));
+totalScore += points;
+roundScores.push(points);
+
+d3.select("#score").text(`Totaalscore: ${totalScore}`);
+
+// Werkelijke locatie
+const [actualX, actualY] = projection(currentPlace.coordinates);
+
+// Teken groene cirkel voor werkelijke locatie
+svg.append("circle")
+  .attr("cx", actualX)
+  .attr("cy", actualY)
+  .attr("r", 5)
+  .attr("fill", "green");
+
+// Voeg tekst met plaatsnaam toe
+svg.append("text")
+  .attr("x", actualX)
+  .attr("y", actualY - 10) // Plaats tekst boven de cirkel
+  .attr("font-size", "12px")
+  .attr("text-anchor", "middle")
+  .attr("fill", "black")
+  .text(currentPlace.name);
+
+// Teken rode cirkel voor kliklocatie
+  svg.append("circle")
+  .attr("cx", clickX)
+  .attr("cy", clickY)
+  .attr("r", 5)
+  .attr("fill", "red");
+
+// Voeg een stippellijntje toe tussen klik en werkelijke locatie
+svg.append("line")
+  .attr("x1", clickX)
+  .attr("y1", clickY)
+  .attr("x2", actualX)
+  .attr("y2", actualY)
+  .attr("stroke", "black")
+  .attr("stroke-width", 1)
+  .attr("stroke-dasharray", "4 2"); // Zorg voor een stippellijn
+
+// Ga naar de volgende ronde na een korte pauze
+setTimeout(nextRound, 2000);
+}
+
+// Spel beëindigen
+function endGame() {
+allowClick = false; // Klikken uitschakelen
+d3.select("#game-info").style("display", "none");
+d3.select("#game-end").style("display", "block");
+    svg.on('click', null);
+const results = roundScores.map((score, index) => `Ronde ${index + 1}: ${score} punten`).join("<br>");
+d3.select("#endScore").html("Totale score: " + totalScore);
+d3.select("#results").html(results);
+
+}
+
+// Bereken afstand (c-formule)
+function calculateDistance(lat1, lon1, lat2, lon2) {
+  const toRad = (deg) => (deg * Math.PI) / 180;
+  const R = 6371; // Straal van de aarde in km
+  const dLat = toRad(lat2 - lat1);
+  const dLon = toRad(lon2 - lon1);
+  const a =
+    Math.sin(dLat / 2) * Math.sin(dLat / 2) +
+    Math.cos(toRad(lat1)) * Math.cos(toRad(lat2)) *
+    Math.sin(dLon / 2) * Math.sin(dLon / 2);
+  const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+  return R * c; // Afstand in km
+}
+
+// Bereken punten
+function calculatePoints(distance, maxDistance = 50) {
+// Zorg dat de punten minimaal 0 en maximaal 100 zijn
+const scaledDistance = Math.min(distance, maxDistance);
+return Math.max(0, 100 - (scaledDistance / maxDistance) * 100);
+}
+
+document.getElementById("toggle-rivers").addEventListener("click", () => {
+  const rivers = document.querySelectorAll(".rivers");
+  rivers.forEach((river) => {
+  river.classList.toggle("hidden");
+  });
+});
+
+
+         </script>
+    </body>
+    
+  </html>
